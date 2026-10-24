@@ -118,7 +118,7 @@ PluginComponent {
             errorText = "";
             hasSample = true;
         } catch (e) {
-            console.warn("ConkyBar: JSON-Lesefehler: " + e);
+            console.warn("CorePulse: JSON-Lesefehler: " + e);
         }
     }
 
@@ -130,11 +130,11 @@ PluginComponent {
             onRead: line => root.acceptSample(line)
         }
         stderr: SplitParser {
-            onRead: line => console.warn("ConkyBar Collector: " + line)
+            onRead: line => console.warn("CorePulse Collector: " + line)
         }
         onExited: exitCode => {
             root.errorText = "Collector beendet (" + exitCode + ")";
-            console.warn("ConkyBar: " + root.errorText);
+            console.warn("CorePulse: " + root.errorText);
         }
     }
 
@@ -263,7 +263,7 @@ PluginComponent {
 
     popoutContent: Component {
         PopoutComponent {
-            headerText: "ConkyBar · CPU-Details"
+            headerText: "CorePulse · CPU-Details"
             showCloseButton: true
 
             Column {

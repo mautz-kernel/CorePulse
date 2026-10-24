@@ -1,4 +1,14 @@
-# ConkyBar 0.4.1 — DMS 1.6.3
+# CorePulse — DMS-Systemmonitor (v0.4.2)
+
+CorePulse ist ein kompaktes Systemmonitor-Widget für **DankMaterialShell (DMS)**.
+Entwickelt und getestet mit **DMS 1.6.3** unter MangoWM.
+
+**Kompatibilität:** Sichtbarer Name ab v0.4.2: CorePulse. Die interne
+Plugin-ID `conkyBar`, die QML-Hauptdatei `ConkyBar.qml` und das
+Installationsverzeichnis `conkyBar` bleiben zunächst unverändert. Dadurch
+bleiben bestehende DMS-Leisten und Plugin-Einstellungen erhalten.
+
+## Funktionen
 
 - Ein einziger Graph in der oberen Leiste: vier physische Kerne als
   unterschiedlich gefärbte Linien (Farben aus dem DMS-Theme).
@@ -19,6 +29,12 @@
   nicht ableiten. Intel-Thermal-Zähler erlauben eine bessere Aussage
   über thermische Ereignisse. Niedrige Takte sind im Leerlauf normal.
 
+## Änderungen in 0.4.2
+
+- Anzeigename auf **CorePulse** geändert; interne DMS-ID unverändert.
+- MIT-Lizenz, Autorenangabe und Credits ergänzt.
+- Keine Änderung an Messlogik, Graphen oder Darstellung.
+
 ## Änderungen in 0.4.1
 
 - Alle vier Zahlenfelder in der horizontalen Leiste haben jetzt feste,
@@ -38,15 +54,31 @@
   `RSS` der belegte Hauptspeicher in KiB. Der Verbrauch von QML/Canvas
   ist im DMS/Quickshell-Prozess enthalten und nicht separat ausgewiesen.
 
-## Aktualisieren
+## Installation
 
-Vorhandene `settings.json` wird nicht überschrieben. Das ZIP in das
-bestehende Plugin-Verzeichnis entpacken und DMS neu starten:
+Mit DMS 1.6.3 das Repository in das DMS-Plugin-Verzeichnis klonen:
 
 ```sh
-bsdtar -xf ~/Downloads/dms-conkybar-v0.4.1.zip -C ~/.config/DankMaterialShell/plugins/
+git clone https://github.com/mautz-kernel/CorePulse.git \
+  ~/.config/DankMaterialShell/plugins/conkyBar
 dms restart
 ```
+
+Anschließend unter **Einstellungen → Plugins** aktivieren und zur Leiste
+hinzufügen. Das GitHub-Repository heißt `CorePulse`; der Plugin-Ordner
+bleibt für bestehende DMS-Konfigurationen bei `conkyBar`.
+
+## Aktualisieren
+
+Bei Installation als Git-Checkout:
+
+```sh
+cd ~/.config/DankMaterialShell/plugins/conkyBar
+git pull --ff-only
+dms restart
+```
+
+Die persönliche `settings.json` bleibt dank `.gitignore` unangetastet.
 
 Test des Collectors:
 
@@ -65,3 +97,16 @@ Kernel diese bereitstellt; andere Leistungsbegrenzungen nicht automatisch.
 
 Das QML konnte in dieser Umgebung nicht in einer laufenden DMS-Sitzung
 ausgeführt werden. Das Plugin wurde anhand der DMS-1.6.3-Quellen erstellt.
+
+## Lizenz und Credits
+
+- **Code:** MIT-Lizenz, siehe [LICENSE](LICENSE). Copyright (c) 2026 mautz-kernel.
+- **Entwicklung:** mautz-kernel, mit Unterstützung durch Codegenerierung
+  von OpenAI ChatGPT.
+- **DMS:** Das Plugin nutzt Schnittstellen von
+  [DankMaterialShell](https://github.com/duxlabs-dev/dux-shell) (MIT).
+- **Icons:** Es verwendet die von DMS bereitgestellte Komponente `DankIcon`
+  für Material Icons / Material Symbols (Apache-2.0). Das Repository
+  enthält keine eingebetteten Icon-Grafiken oder Schriftdateien.
+- **Unabhängigkeit:** Aus einer persönlichen Conky-Konfiguration inspiriert,
+  aber kein offizielles Plugin des Conky- oder DMS-Projekts.

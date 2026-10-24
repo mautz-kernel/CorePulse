@@ -1,9 +1,9 @@
 {
   "id": "conkyBar",
-  "name": "ConkyBar",
+  "name": "CorePulse",
   "description": "Kompakter 4-Kern-Multigraph mit DMS-Theme, RAM, /home und CPU-Package-Temperatur; 8-Thread-Popout mit Thermal-Zählern",
-  "version": "0.4.1",
-  "author": "Community prototype",
+  "version": "0.4.2",
+  "author": "mautz-kernel",
   "icon": "monitoring",
   "type": "widget",
   "capabilities": [

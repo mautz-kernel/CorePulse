@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ConkyBar local read-only metrics collector, Python 3 stdlib only.
+"""CorePulse local read-only metrics collector, Python 3 stdlib only.
 
 One JSON object per line on stdout. Does not invoke shell commands or use network.
 The data stream stops when the QML Process is destroyed.
@@ -28,7 +28,7 @@ def config():
     except FileNotFoundError:
         pass  # Ohne Konfigurationsdatei die sicheren Standardwerte verwenden.
     except (OSError, ValueError) as exc:
-        print(f"ConkyBar: settings.json konnte nicht gelesen werden: {exc}", file=sys.stderr)
+        print(f"CorePulse: settings.json konnte nicht gelesen werden: {exc}", file=sys.stderr)
     if not isinstance(result["mountpoint"], str) or not result["mountpoint"].startswith("/"):
         result["mountpoint"] = "/home"
     if not isinstance(result["temperature_paths"], list):
@@ -298,7 +298,7 @@ def main():
         try:
             print(json.dumps(sample(previous, current, opts, sensors), separators=(",", ":")), flush=True)
         except Exception as exc:
-            print(f"ConkyBar: Fehler bei Messung: {exc}", file=sys.stderr, flush=True)
+            print(f"CorePulse: Fehler bei Messung: {exc}", file=sys.stderr, flush=True)
         previous = current
         if args.once:
             break
