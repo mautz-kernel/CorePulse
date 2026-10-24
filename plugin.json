@@ -1,0 +1,17 @@
+{
+  "id": "conkyBar",
+  "name": "ConkyBar",
+  "description": "Kompakter 4-Kern-Multigraph mit DMS-Theme, RAM, /home und CPU-Package-Temperatur; 8-Thread-Popout mit Thermal-Zählern",
+  "version": "0.4.1",
+  "author": "Community prototype",
+  "icon": "monitoring",
+  "type": "widget",
+  "capabilities": [
+    "dankbar-widget"
+  ],
+  "component": "./ConkyBar.qml",
+  "permissions": [
+    "process"
+  ],
+  "requires_dms": ">=1.6.0"
+}

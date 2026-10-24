@@ -1,0 +1,5 @@
+{
+  "mountpoint": "/home",
+  "interval_seconds": 2.0,
+  "temperature_paths": []
+}
