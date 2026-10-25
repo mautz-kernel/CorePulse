@@ -10,20 +10,31 @@ bleiben bestehende DMS-Leisten und Plugin-Einstellungen erhalten.
 
 ## Funktionen
 
-- Ein einziger Graph in der oberen Leiste: vier physische Kerne als
-  unterschiedlich gefärbte Linien (Farben aus dem DMS-Theme).
-- Direkt sichtbar: CPU-Gesamtauslastung, RAM (8.8/15.3G), freier Platz
-  unter /home (244.8G), CPU-Package-Temperatur. Keine Akkuanzeige.
-- Beim Anklicken: acht logische CPU-Threads mit Einzelverlauf,
-  Auslastung in Prozent und aktueller GHz-Anzeige.
-- Im Klickfenster: aktuelle Kernel-Obergrenze der Taktfrequenz und
-  ggf. Intel-P-State-Maximalprozent; diese Werte können durch TLP beeinflusst sein.
-- Intel-Thermal-Throttle-Zähler: wenn sich ein Core-/Package-Zähler
-  seit Pluginstart erhöht, wird das CPU-Icon etwa 30 Sekunden rot und
-  das Klickfenster meldet das Ereignis. Fehlt die Schnittstelle, wird
+- CPU
+  Die Prozessorauslastung der einzelnen Kerne wird über 4 
+  andersafarbige Graphen dargestellt. Die Gesamtauslastung 
+  in Prozent ist direkt sichtbar.
+- RAM
+  Zeigt den momentanen Verbrauch an
+- DISK
+  Zeigt an wieviel freier Platz noch auf /home verfügbar ist
+- Temperatur
+  Zeigt die Temperatur des CPU Packages an
+  
+  Beim Anklicken der Leiste werden alle 8 Threads der CPU  
+  mit EInzelgraphen, Auslastung in Prozent und aktueller 
+  Taktfrequenz angezeigt.
+  Das Leistungslimit der Intel Pstates wird angezeigt
+  und die Anzahl der aufgetreten Thermal Throotle Ereignisse.
+  Kommt es zu Thermal Throttling färbt sich das CPU Icon für
+  30 Sekunden Rot. .
+  Fehlt die Schnittstelle, wird
   **nicht** "kein Throttling" behauptet.
+.
 - DMS zeichnet als `BasePill` die Hintergrundfarbe, Rundung und Transparenz.
+
 - Der Python-Collector arbeitet rein lesend mit `/proc` und `/sys`.
+
 - Die vier farbigen Linien stellen die **Auslastung**, nicht die Frequenz dar.
   Die Farbe identifiziert den Kern; daraus lässt sich Thermal-Throttling
   nicht ableiten. Intel-Thermal-Zähler erlauben eine bessere Aussage
