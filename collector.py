@@ -251,11 +251,16 @@ def sample(previous, current, opts, sensors):
     cur_total, cur_cores = current
     groups = physical_core_groups(cur_cores.keys())
     freq_by_cpu = cpu_frequencies(cur_cores.keys())
+    # Aktuell gesetzte cpufreq-Obergrenze (z.B. auto-cpufreq, TLP oder manuell).
+    # Ein sysfs-Policy-Limit ist keine garantierte Turbo- oder Throttle-Frequenz.
+    policy_by_cpu = {cpu_id: scaling_max_freq_mhz(cpu_id) for cpu_id in cur_cores}
+
     # Alle verfügbaren logischen Threads für die Detailansicht.
     threads = [{
         "id": cpu_id,
         "usage": usage(cur_cores[cpu_id], prev_cores.get(cpu_id)),
         "mhz": freq_by_cpu.get(cpu_id, 0),
+        "max_mhz": policy_by_cpu.get(cpu_id, 0),
     } for cpu_id in sorted(cur_cores)]
 
     # Vier *physische* Kerne für die gemeinsame Grafik im Panel.
@@ -268,7 +273,6 @@ def sample(previous, current, opts, sensors):
             "mhz": max((freq_by_cpu.get(cpu_id, 0) for cpu_id in cpu_ids), default=0),
         })
 
-    policy_limits = [scaling_max_freq_mhz(cpu_id) for cpu_id in cur_cores]
     used, total = mem_gib()
     return {
         "cpu_total": usage(cur_total, prev_total),
@@ -279,7 +283,7 @@ def sample(previous, current, opts, sensors):
         "mountpoint": opts["mountpoint"],
         "disk_free_gib": disk_gib(opts["mountpoint"]),
         "temps": read_temps(sensors),
-        "policy_max_mhz": max(policy_limits, default=0),
+        "policy_max_mhz": max(policy_by_cpu.values(), default=0),
         "intel_max_perf_pct": intel_max_perf_pct(),
         "thermal": thermal_counters(groups),
     }

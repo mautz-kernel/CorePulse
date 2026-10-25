@@ -32,7 +32,7 @@ PluginComponent {
     property int throttleEvents: 0
     property int throttleHotSamples: 0
 
-    popoutWidth: 455
+    popoutWidth: 940
 
     // Feste Breiten verhindern, dass RAM-, Speicher- und CPU-Ziffern die
     // nachfolgenden Icons bei jeder Aktualisierung verschieben.
@@ -63,7 +63,7 @@ PluginComponent {
             const h = (historyById[c.id] || []).slice(-(historyLength - 1));
             h.push(Number(c.usage) || 0);
             next.push({id: c.id, usage: Number(c.usage) || 0,
-                          mhz: Number(c.mhz) || 0, samples: h});
+                          mhz: Number(c.mhz) || 0, maxMhz: Number(c.max_mhz) || 0, samples: h});
         }
         return next;
     }
@@ -261,6 +261,8 @@ PluginComponent {
         }
     }
 
+    // Detailfenster: acht Threads in zwei Reihen mit je vier Karten.
+    // Die schmale Leistenansicht bleibt unverändert.
     popoutContent: Component {
         PopoutComponent {
             headerText: "CorePulse · CPU-Details"
@@ -269,86 +271,175 @@ PluginComponent {
             Column {
                 id: details
                 width: parent.width
-                spacing: Theme.spacingXS
-                leftPadding: Theme.spacingS
-                rightPadding: Theme.spacingS
-                bottomPadding: Theme.spacingS
+                spacing: Theme.spacingM
+                leftPadding: Theme.spacingM
+                rightPadding: Theme.spacingM
+                bottomPadding: Theme.spacingM
+
+                readonly property int detailFontSize: Math.max(14, Theme.fontSizeMedium)
+                readonly property int titleFontSize: Math.max(16, Theme.fontSizeMedium + 1)
+                readonly property real innerWidth: width - leftPadding - rightPadding
 
                 Text {
-                    text: "8 logische CPUs · Verlauf 60 Sekunden"
-                    font.pixelSize: Theme.fontSizeSmall
+                    text: root.threadData.length + " logische CPUs · 60 Sekunden Verlauf"
+                    font.pixelSize: details.detailFontSize
                     color: Theme.surfaceVariantText
                 }
-                Repeater {
-                    model: root.threadData.length
-                    Row {
-                        property var cpu: root.threadData[index]
-                        spacing: Theme.spacingS
-                        height: 28
-                        Text {
-                            width: 53; height: parent.height
-                            text: "CPU " + cpu.id
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        Text {
-                            width: 44; height: parent.height
-                            text: Math.round(cpu.usage) + "%"
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            horizontalAlignment: Text.AlignRight
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        MultiCpuGraph {
-                            width: 155; height: 22
-                            anchors.verticalCenter: parent.verticalCenter
-                            maxSamples: root.historyLength
-                            series: [{samples: cpu.samples,
-                                      color: root.coreColors[index % root.coreColors.length]}]
-                        }
-                        Text {
-                            width: 85; height: parent.height
-                            text: cpu.mhz > 0 ? (cpu.mhz / 1000).toFixed(2) + " GHz" : "-- GHz"
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            horizontalAlignment: Text.AlignRight
-                            verticalAlignment: Text.AlignVCenter
+
+                Grid {
+                    id: cpuGrid
+                    width: details.innerWidth
+                    columns: 4
+                    columnSpacing: Theme.spacingS
+                    rowSpacing: Theme.spacingS
+                    readonly property real cardWidth: Math.floor((width - columnSpacing * 3) / 4)
+
+                    Repeater {
+                        model: root.threadData.length
+                        Item {
+                            id: card
+                            required property int index
+                            readonly property var cpu: root.threadData[index]
+                            readonly property color traceColor: root.coreColors[index % root.coreColors.length]
+                            width: cpuGrid.cardWidth
+                            height: 174
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: Theme.cornerRadius
+                                color: Theme.withAlpha(Theme.surfaceVariantText, 0.055)
+                                border.width: 1
+                                border.color: Theme.withAlpha(Theme.outline, 0.24)
+                            }
+
+                            Column {
+                                anchors.fill: parent
+                                anchors.margins: Theme.spacingS
+                                spacing: Theme.spacingXS
+
+                                Item {
+                                    width: parent.width
+                                    height: 25
+
+                                    Rectangle {
+                                        width: 7
+                                        height: 14
+                                        radius: 3
+                                        color: card.traceColor
+                                        anchors.left: parent.left
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                    Text {
+                                        text: "CPU " + card.cpu.id
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 13
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        font.pixelSize: details.titleFontSize
+                                        font.weight: Font.DemiBold
+                                        color: Theme.surfaceText
+                                    }
+                                    Text {
+                                        text: Math.round(card.cpu.usage) + "%"
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        font.pixelSize: details.titleFontSize
+                                        font.weight: Font.DemiBold
+                                        color: Theme.surfaceText
+                                    }
+                                }
+
+                                MultiCpuGraph {
+                                    width: parent.width
+                                    height: 65
+                                    maxSamples: root.historyLength
+                                    series: [{
+                                        samples: card.cpu.samples,
+                                        color: card.traceColor
+                                    }]
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: card.cpu.mhz > 0
+                                        ? (card.cpu.mhz / 1000).toFixed(2) + " GHz"
+                                        : "Takt: –"
+                                    font.pixelSize: details.detailFontSize
+                                    font.weight: Font.DemiBold
+                                    color: Theme.surfaceText
+                                }
+                                Text {
+                                    width: parent.width
+                                    text: card.cpu.maxMhz > 0
+                                        ? "Limit " + (card.cpu.maxMhz / 1000).toFixed(2) + " GHz"
+                                        : "Limit nicht verfügbar"
+                                    font.pixelSize: Math.max(12, details.detailFontSize - 1)
+                                    color: Theme.surfaceVariantText
+                                }
+                            }
                         }
                     }
                 }
+
                 Rectangle {
-                    width: parent.width - Theme.spacingM
+                    width: details.innerWidth
                     height: 1
                     color: Theme.outline
                     opacity: 0.35
                 }
-                Text {
-                    text: "Package: " + root.tempText + "  ·  Gesamt: " + Math.round(root.cpuTotal) + "%"
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceText
+
+                Item {
+                    width: details.innerWidth
+                    height: 28
+                    Text {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "CPU gesamt: " + Math.round(root.cpuTotal) + "%"
+                        font.pixelSize: details.detailFontSize
+                        font.weight: Font.DemiBold
+                        color: Theme.surfaceText
+                    }
+                    Text {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "CPU-Package: " + root.tempText
+                        font.pixelSize: details.detailFontSize
+                        font.weight: Font.DemiBold
+                        color: Theme.surfaceText
+                    }
                 }
+
                 Text {
-                    text: root.maxFreqMhz > 0 ?
-                        "Kernel-Taktlimit (ggf. TLP): " + (root.maxFreqMhz / 1000).toFixed(2) + " GHz" :
-                        "Kernel-Taktlimit: nicht verfügbar"
-                    font.pixelSize: Theme.fontSizeSmall
+                    text: root.maxFreqMhz > 0
+                        ? "Aktuelles Kernel-Policy-Limit: " + (root.maxFreqMhz / 1000).toFixed(2) + " GHz (z. B. auto-cpufreq/TLP)"
+                        : "Kernel-Policy-Limit: nicht verfügbar"
+                    font.pixelSize: details.detailFontSize
                     color: Theme.surfaceVariantText
                 }
                 Text {
                     visible: root.maxPerfPct >= 0
                     text: "Intel P-State-Leistungslimit: " + root.maxPerfPct.toFixed(0) + "%"
-                    font.pixelSize: Theme.fontSizeSmall
+                    font.pixelSize: details.detailFontSize
                     color: Theme.surfaceVariantText
                 }
                 Text {
-                    text: !root.thermalAvailable ?
-                        "Thermal-Throttle-Zähler: nicht verfügbar" :
-                        (root.throttleHotSamples > 0 ? "THERMAL THROTTLING erkannt!" :
-                         "Thermal-Ereignisse seit Widgetstart: " + root.throttleEvents)
+                    width: details.innerWidth
+                    wrapMode: Text.WordWrap
+                    text: !root.thermalAvailable
+                        ? "Thermal-Throttle-Zähler: nicht verfügbar"
+                        : (root.throttleHotSamples > 0
+                            ? "THERMAL THROTTLING erkannt!"
+                            : "Thermal-Ereignisse seit Widgetstart: " + root.throttleEvents)
                     color: root.throttleHotSamples > 0 ? Theme.error : Theme.surfaceText
-                    font.pixelSize: Theme.fontSizeSmall
+                    font.pixelSize: details.detailFontSize
                     font.weight: root.throttleHotSamples > 0 ? Font.Bold : Font.Normal
+                }
+                Text {
+                    width: details.innerWidth
+                    wrapMode: Text.WordWrap
+                    text: "Hinweis: Das Policy-Limit ist keine garantierte Turbo-Frequenz. "
+                        + "Ein niedriger Takt allein beweist kein Hitzethrottling."
+                    font.pixelSize: Math.max(12, details.detailFontSize - 1)
+                    color: Theme.surfaceVariantText
                 }
             }
         }
