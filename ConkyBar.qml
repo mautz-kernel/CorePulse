@@ -19,6 +19,13 @@ PluginComponent {
 
     property var physData: []
     property var threadData: []
+    property string activeView: "cpu" // cpu | ram | disk
+    property var topProcesses: []
+    property var mounts: []
+    property real memTotalGiB: -1
+    property real memAvailableGiB: 0
+    readonly property real memoryFraction: memTotalGiB > 0
+        ? Math.min(1, Math.max(0, (memTotalGiB - memAvailableGiB) / memTotalGiB)) : 0
     property real cpuTotal: 0
     property string memText: "--"
     property string diskText: "--"
@@ -32,7 +39,7 @@ PluginComponent {
     property int throttleEvents: 0
     property int throttleHotSamples: 0
 
-    popoutWidth: 940
+    popoutWidth: activeView === "cpu" ? 940 : 700
 
     // Feste Breiten verhindern, dass RAM-, Speicher- und CPU-Ziffern die
     // nachfolgenden Icons bei jeder Aktualisierung verschieben.
@@ -108,7 +115,11 @@ PluginComponent {
             physData = updatedSamples(data.cores.slice(0, 4), physData);
             threadData = updatedSamples(data.threads, threadData);
             cpuTotal = Number(data.cpu_total) || 0;
+            topProcesses = Array.isArray(data.top_processes) ? data.top_processes : [];
+            mounts = Array.isArray(data.mounts) ? data.mounts : [];
             memText = compactGiB(data.mem_used_gib) + "/" + compactGiB(data.mem_total_gib) + "G";
+            memTotalGiB = Number(data.mem_total_gib) || -1;
+            memAvailableGiB = Math.max(0, memTotalGiB - (Number(data.mem_used_gib) || 0));
             diskText = compactGiB(data.disk_free_gib) + "G";
             tempText = (data.temps || []).length ? Math.round(data.temps[0].c) + "°C" : "--";
             maxFreqMhz = Number(data.policy_max_mhz) || 0;
@@ -138,96 +149,174 @@ PluginComponent {
         }
     }
 
+    function openDetail(view) {
+        activeView = view;
+        // Trigger through the DMS API so the native popout is anchored to
+        // the entire BasePill and respects the current bar orientation.
+        root.triggerPopout();
+    }
+
     // BasePill zeichnet den Hintergrund selbst (DMS-Theme, Transparenz, Radius).
+    // Three independent click targets inside ONE native BasePill.
+    // Default CPU, RAM and disks each open the matching popout tab.
     horizontalBarPill: Component {
         Row {
             spacing: 7
-            DankIcon {
-                name: "memory"
-                size: root.iconSize
-                color: root.throttleHotSamples > 0 ? Theme.error : Theme.widgetIconColor
-                anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenter: parent.verticalCenter
+
+            Item {
+                id: cpuSegment
+                width: cpuLine.implicitWidth
+                height: Math.max(cpuLine.implicitHeight, root.graphHeight)
+                Row {
+                    id: cpuLine
+                    anchors.centerIn: parent
+                    spacing: 7
+                    DankIcon {
+                        name: "memory"
+                        size: root.iconSize
+                        color: root.throttleHotSamples > 0 ? Theme.error : Theme.widgetIconColor
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: root.hasSample ? Math.round(root.cpuTotal) + "%" : "--"
+                        width: root.cpuNumberWidth
+                        horizontalAlignment: Text.AlignRight
+                        color: Theme.widgetTextColor
+                        font.family: Theme.defaultFontFamily
+                        font.pixelSize: root.textSize
+                        font.weight: Font.DemiBold
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    MultiCpuGraph {
+                        width: 112
+                        height: root.graphHeight
+                        maxSamples: root.historyLength
+                        anchors.verticalCenter: parent.verticalCenter
+                        series: root.physData.map((cpu, index) => ({
+                            samples: cpu.samples,
+                            color: root.coreColors[index % root.coreColors.length]
+                        }))
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onPressed: root.openDetail("cpu")
+                }
             }
-            Text {
-                text: root.hasSample ? Math.round(root.cpuTotal) + "%" : "--"
-                width: root.cpuNumberWidth
-                horizontalAlignment: Text.AlignRight
-                color: Theme.widgetTextColor
-                font.family: Theme.defaultFontFamily
-                font.pixelSize: root.textSize
-                font.weight: Font.DemiBold
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            MultiCpuGraph {
-                width: 112
-                height: root.graphHeight
-                maxSamples: root.historyLength
-                anchors.verticalCenter: parent.verticalCenter
-                series: root.physData.map((cpu, index) => ({
-                    samples: cpu.samples,
-                    color: root.coreColors[index % root.coreColors.length]
-                }))
-            }
+
             Rectangle {
                 width: 1; height: Math.min(20, root.graphHeight)
                 color: Theme.widgetTextColor; opacity: 0.17
                 anchors.verticalCenter: parent.verticalCenter
             }
-            DankIcon {
-                name: "developer_board"; size: root.iconSize
-                color: Theme.widgetIconColor
-                anchors.verticalCenter: parent.verticalCenter
+
+            Item {
+                id: ramSegment
+                width: ramLine.implicitWidth
+                height: Math.max(ramLine.implicitHeight, root.graphHeight)
+                Row {
+                    id: ramLine
+                    anchors.centerIn: parent
+                    spacing: 7
+                    DankIcon {
+                        name: "developer_board"; size: root.iconSize
+                        color: Theme.widgetIconColor
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: root.memText
+                        width: root.ramNumberWidth
+                        horizontalAlignment: Text.AlignRight
+                        color: Theme.widgetTextColor
+                        font.family: Theme.defaultFontFamily
+                        font.pixelSize: root.textSize
+                        font.weight: Font.DemiBold
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onPressed: root.openDetail("ram")
+                }
             }
-            Text {
-                text: root.memText
-                width: root.ramNumberWidth
-                horizontalAlignment: Text.AlignRight
-                color: Theme.widgetTextColor
-                font.family: Theme.defaultFontFamily
-                font.pixelSize: root.textSize
-                font.weight: Font.DemiBold
-                anchors.verticalCenter: parent.verticalCenter
-            }
+
             Rectangle {
                 width: 1; height: Math.min(20, root.graphHeight)
                 color: Theme.widgetTextColor; opacity: 0.17
                 anchors.verticalCenter: parent.verticalCenter
             }
-            DankIcon {
-                name: "storage"; size: root.iconSize
-                color: Theme.widgetIconColor
-                anchors.verticalCenter: parent.verticalCenter
+
+            Item {
+                id: diskSegment
+                width: diskLine.implicitWidth
+                height: Math.max(diskLine.implicitHeight, root.graphHeight)
+                Row {
+                    id: diskLine
+                    anchors.centerIn: parent
+                    spacing: 7
+                    DankIcon {
+                        name: "storage"; size: root.iconSize
+                        color: Theme.widgetIconColor
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: root.diskText
+                        width: root.diskNumberWidth
+                        horizontalAlignment: Text.AlignRight
+                        color: Theme.widgetTextColor
+                        font.family: Theme.defaultFontFamily
+                        font.pixelSize: root.textSize
+                        font.weight: Font.DemiBold
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onPressed: root.openDetail("disk")
+                }
             }
-            Text {
-                text: root.diskText
-                width: root.diskNumberWidth
-                horizontalAlignment: Text.AlignRight
-                color: Theme.widgetTextColor
-                font.family: Theme.defaultFontFamily
-                font.pixelSize: root.textSize
-                font.weight: Font.DemiBold
-                anchors.verticalCenter: parent.verticalCenter
-            }
+
             Rectangle {
                 width: 1; height: Math.min(20, root.graphHeight)
                 color: Theme.widgetTextColor; opacity: 0.17
                 anchors.verticalCenter: parent.verticalCenter
             }
-            DankIcon {
-                name: "device_thermostat"; size: root.iconSize
-                color: Theme.widgetIconColor
-                anchors.verticalCenter: parent.verticalCenter
+
+            Item {
+                id: tempSegment
+                width: tempLine.implicitWidth
+                height: Math.max(tempLine.implicitHeight, root.graphHeight)
+                Row {
+                    id: tempLine
+                    anchors.centerIn: parent
+                    spacing: 7
+                    DankIcon {
+                        name: "device_thermostat"; size: root.iconSize
+                        color: Theme.widgetIconColor
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: root.tempText
+                        width: root.tempNumberWidth
+                        horizontalAlignment: Text.AlignRight
+                        color: Theme.widgetTextColor
+                        font.family: Theme.defaultFontFamily
+                        font.pixelSize: root.textSize
+                        font.weight: Font.DemiBold
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onPressed: root.openDetail("cpu")
+                }
             }
-            Text {
-                text: root.tempText
-                width: root.tempNumberWidth
-                horizontalAlignment: Text.AlignRight
-                color: Theme.widgetTextColor
-                font.family: Theme.defaultFontFamily
-                font.pixelSize: root.textSize
-                font.weight: Font.DemiBold
-                anchors.verticalCenter: parent.verticalCenter
-            }
+
             Text {
                 visible: !root.hasSample
                 text: root.errorText || "Lade…"
@@ -265,11 +354,53 @@ PluginComponent {
     // Die schmale Leistenansicht bleibt unverändert.
     popoutContent: Component {
         PopoutComponent {
-            headerText: "CorePulse · CPU-Details"
+            headerText: root.activeView === "cpu" ? "CorePulse · CPU-Details"
+                      : root.activeView === "ram" ? "CorePulse · Arbeitsspeicher"
+                      : "CorePulse · Laufwerke"
             showCloseButton: true
+
+            Row {
+                id: detailTabs
+                width: parent.width
+                spacing: Theme.spacingS
+                leftPadding: Theme.spacingM
+                rightPadding: Theme.spacingM
+                bottomPadding: Theme.spacingM
+
+                Repeater {
+                    model: ["cpu", "ram", "disk"]
+                    Rectangle {
+                        id: tab
+                        required property int index
+                        required property string modelData
+                        readonly property bool selected: modelData === root.activeView
+                        width: 128
+                        height: 38
+                        radius: Theme.cornerRadius
+                        color: selected ? Theme.withAlpha(Theme.primary, 0.20)
+                                        : Theme.withAlpha(Theme.surfaceVariantText, 0.07)
+                        border.width: selected ? 1 : 0
+                        border.color: Theme.primary
+                        Text {
+                            anchors.centerIn: parent
+                            text: tab.modelData === "cpu" ? "CPU"
+                                : tab.modelData === "ram" ? "RAM" : "Laufwerke"
+                            font.pixelSize: Math.max(14, Theme.fontSizeMedium)
+                            font.weight: parent.selected ? Font.DemiBold : Font.Normal
+                            color: parent.selected ? Theme.primary : Theme.surfaceText
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.activeView = tab.modelData
+                        }
+                    }
+                }
+            }
 
             Column {
                 id: details
+                visible: root.activeView === "cpu"
                 width: parent.width
                 spacing: Theme.spacingM
                 leftPadding: Theme.spacingM
@@ -443,5 +574,195 @@ PluginComponent {
                 }
             }
         }
+
+            Column {
+                id: ramDetails
+                visible: root.activeView === "ram"
+                width: parent.width
+                leftPadding: Theme.spacingM
+                rightPadding: Theme.spacingM
+                bottomPadding: Theme.spacingL
+                spacing: Theme.spacingM
+                readonly property int detailSize: Math.max(14, Theme.fontSizeMedium)
+                readonly property real usable: width - leftPadding - rightPadding
+
+                Text {
+                    text: "RAM: " + root.memText + "    ·    Frei/verfügbar: "
+                        + (root.memTotalGiB >= 0 ? root.memAvailableGiB.toFixed(1) + " GiB" : "–")
+                    font.pixelSize: ramDetails.detailSize + 1
+                    font.weight: Font.DemiBold
+                    color: Theme.surfaceText
+                }
+                Rectangle {
+                    width: ramDetails.usable; height: 12
+                    radius: 6
+                    color: Theme.withAlpha(Theme.surfaceVariantText, 0.17)
+                    Rectangle {
+                        width: parent.width * root.memoryFraction
+                        height: parent.height
+                        radius: parent.radius
+                        color: Theme.primary
+                    }
+                }
+                Text {
+                    text: "Größte Prozesse nach RAM-Belegung (RSS)"
+                    font.pixelSize: ramDetails.detailSize + 1
+                    font.weight: Font.DemiBold
+                    color: Theme.surfaceText
+                }
+                Text {
+                    visible: root.topProcesses.length === 0
+                    text: "Keine lesbaren Prozessdaten verfügbar"
+                    font.pixelSize: ramDetails.detailSize
+                    color: Theme.surfaceVariantText
+                }
+                Repeater {
+                    model: root.topProcesses.length
+                    Item {
+                        required property int index
+                        readonly property var proc: root.topProcesses[index]
+                        width: ramDetails.usable
+                        height: 36
+                        Text {
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 245
+                            elide: Text.ElideRight
+                            text: (index + 1) + ".  " + proc.name
+                            font.pixelSize: ramDetails.detailSize
+                            color: Theme.surfaceText
+                        }
+                        Text {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 258
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 110
+                            text: "PID " + proc.pid
+                            font.pixelSize: ramDetails.detailSize - 1
+                            color: Theme.surfaceVariantText
+                        }
+                        Text {
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: proc.rss_mib.toFixed(1) + " MiB"
+                            font.pixelSize: ramDetails.detailSize
+                            font.weight: Font.DemiBold
+                            color: Theme.surfaceText
+                        }
+                        Rectangle {
+                            anchors.bottom: parent.bottom
+                            width: parent.width
+                            height: 3
+                            radius: 1.5
+                            color: Theme.withAlpha(Theme.surfaceVariantText, 0.09)
+                            Rectangle {
+                                height: parent.height
+                                radius: parent.radius
+                                width: parent.width * Math.min(1, proc.rss_mib / Math.max(1, root.topProcesses[0].rss_mib))
+                                color: Theme.tertiary
+                            }
+                        }
+                    }
+                }
+                Text {
+                    width: ramDetails.usable
+                    wrapMode: Text.WordWrap
+                    text: "RSS zählt auch gemeinsam genutzten Speicher. Die einzelnen Prozesse dürfen nicht einfach zur RAM-Gesamtnutzung addiert werden. Aktualisierung etwa alle 10 Sekunden."
+                    font.pixelSize: Math.max(12, ramDetails.detailSize - 1)
+                    color: Theme.surfaceVariantText
+                }
+            }
+
+            Column {
+                id: diskDetails
+                visible: root.activeView === "disk"
+                width: parent.width
+                leftPadding: Theme.spacingM
+                rightPadding: Theme.spacingM
+                bottomPadding: Theme.spacingL
+                spacing: Theme.spacingM
+                readonly property int detailSize: Math.max(14, Theme.fontSizeMedium)
+                readonly property real usable: width - leftPadding - rightPadding
+
+                Text {
+                    text: "Lokale eingehängte Dateisysteme"
+                    font.pixelSize: diskDetails.detailSize + 1
+                    font.weight: Font.DemiBold
+                    color: Theme.surfaceText
+                }
+                Text {
+                    visible: root.mounts.length === 0
+                    text: "Keine lokalen Laufwerke gefunden"
+                    font.pixelSize: diskDetails.detailSize
+                    color: Theme.surfaceVariantText
+                }
+                Flickable {
+                    id: volumeScroll
+                    width: diskDetails.usable
+                    height: Math.min(430, volumeRows.implicitHeight)
+                    contentWidth: width
+                    contentHeight: volumeRows.implicitHeight
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    Column {
+                        id: volumeRows
+                        width: volumeScroll.width
+                        spacing: Theme.spacingS
+
+                        Repeater {
+                            model: root.mounts.length
+                            Column {
+                                required property int index
+                                readonly property var volume: root.mounts[index]
+                                width: volumeRows.width
+                                spacing: 5
+                                Text {
+                                    width: parent.width
+                                    elide: Text.ElideMiddle
+                                    text: volume.mountpoint + "    (" + volume.fstype + ")"
+                                    font.pixelSize: diskDetails.detailSize
+                                    font.weight: Font.DemiBold
+                                    color: Theme.surfaceText
+                                }
+                                Rectangle {
+                                    width: parent.width
+                                    height: 9
+                                    radius: 4
+                                    color: Theme.withAlpha(Theme.surfaceVariantText, 0.16)
+                                    Rectangle {
+                                        height: parent.height
+                                        width: parent.width * Math.min(1, Math.max(0, volume.used_pct / 100))
+                                        radius: parent.radius
+                                        color: volume.used_pct > 90 ? Theme.warning : Theme.primary
+                                    }
+                                }
+                                Text {
+                                    width: parent.width
+                                    text: volume.used_gib.toFixed(1) + " GiB belegt  ·  "
+                                        + volume.free_gib.toFixed(1) + " GiB verfügbar  ·  "
+                                        + volume.total_gib.toFixed(1) + " GiB gesamt (" + volume.used_pct.toFixed(0) + " %)"
+                                    font.pixelSize: diskDetails.detailSize - 1
+                                    color: Theme.surfaceVariantText
+                                }
+                                Item { width: 1; height: 5 }
+                            }
+                        }
+                    }
+                }
+                Text {
+                    visible: volumeScroll.contentHeight > volumeScroll.height
+                    text: "Für weitere Laufwerke in der Liste scrollen"
+                    font.pixelSize: Math.max(12, diskDetails.detailSize - 1)
+                    color: Theme.surfaceVariantText
+                }
+                Text {
+                    width: diskDetails.usable
+                    wrapMode: Text.WordWrap
+                    text: "Nur lokal eingehängte Laufwerke. Nicht eingehängte Datenträger und Netzlaufwerke werden nicht abgefragt; Aktualisierung etwa alle 10 Sekunden."
+                    font.pixelSize: Math.max(12, diskDetails.detailSize - 1)
+                    color: Theme.surfaceVariantText
+                }
+            }
     }
 }

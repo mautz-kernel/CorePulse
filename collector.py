@@ -180,6 +180,92 @@ def disk_gib(path):
         return None
 
 
+# Slow-path detail collection: no external commands, no root privileges.
+# Run every 10 seconds rather than at the 2-second CPU sampling interval.
+def top_memory_processes(limit=10):
+    """Highest per-process RSS values, not unique/proportional memory use."""
+    ranked = []
+    for folder in Path("/proc").iterdir():
+        if not folder.name.isdecimal():
+            continue
+        try:
+            with (folder / "status").open(encoding="utf-8", errors="replace") as handle:
+                name = None
+                rss_kib = 0
+                for line in handle:
+                    if line.startswith("Name:"):
+                        name = line.partition(":")[2].strip()
+                    elif line.startswith("VmRSS:"):
+                        rss_kib = int(line.split()[1])
+                    if name and rss_kib:
+                        break
+            if name and rss_kib > 0:
+                ranked.append({
+                    "pid": int(folder.name),
+                    "name": name,
+                    "rss_mib": round(rss_kib / 1024, 1),
+                })
+        except (OSError, ValueError, IndexError):
+            # Process ended, procfs is restricted, or metadata is unreadable.
+            continue
+    ranked.sort(key=lambda item: item["rss_mib"], reverse=True)
+    return ranked[:limit]
+
+
+def decode_mount_field(s):
+    """Decode mountinfo escaping (spaces, backslashes and control chars)."""
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), s)
+
+
+def mounted_volumes(limit=18):
+    """Local mounted volumes only; omit pseudo filesystems and bind duplicates."""
+    result = []
+    seen_mountpoints = set()
+    # Whitelist supported local disk filesystems, plus block-device-backed FS.
+    local_types = {"ext2", "ext3", "ext4", "btrfs", "xfs", "f2fs", "zfs",
+                   "vfat", "exfat", "ntfs", "ntfs3", "fuseblk", "bcachefs"}
+    for line in read_text("/proc/self/mountinfo").splitlines():
+        try:
+            left, right = line.split(" - ", 1)
+            left_cols = left.split()
+            right_cols = right.split()
+            mountpoint = decode_mount_field(left_cols[4])
+            fs_type = right_cols[0]
+            device = decode_mount_field(right_cols[1])
+            if (fs_type not in local_types or mountpoint in seen_mountpoints
+                    or not mountpoint.startswith("/")
+                    or mountpoint.startswith(("/proc/", "/sys/", "/dev/",
+                                             "/var/lib/containers/", "/var/lib/docker/"))
+                    or (mountpoint.startswith("/run/") and
+                        not mountpoint.startswith("/run/media/"))):
+                continue
+            # Skip bind-mounted directory clones; allow btrfs subvolumes.
+            root_field = decode_mount_field(left_cols[3])
+            if root_field != "/" and fs_type != "btrfs":
+                continue
+            stats = os.statvfs(mountpoint)
+            blocks = stats.f_blocks
+            if blocks <= 0:
+                continue
+            total = blocks * stats.f_frsize / (1024 ** 3)
+            avail = stats.f_bavail * stats.f_frsize / (1024 ** 3)
+            used = (blocks - stats.f_bfree) * stats.f_frsize / (1024 ** 3)
+            seen_mountpoints.add(mountpoint)
+            result.append({
+                "mountpoint": mountpoint,
+                "source": device,
+                "fstype": fs_type,
+                "total_gib": round(total, 1),
+                "used_gib": round(used, 1),
+                "free_gib": round(avail, 1),
+                "used_pct": round(100 * used / total, 1) if total else 0,
+            })
+        except (ValueError, OSError, IndexError):
+            continue
+    result.sort(key=lambda item: (item["mountpoint"] != "/", item["mountpoint"] != "/home", item["mountpoint"]))
+    return result[:limit]
+
+
 def physical_core_groups(cpu_ids):
     """Gruppiert logische Linux-CPUs nach CPU-Package + physischem Core.
 
@@ -295,12 +381,22 @@ def main():
     args = parser.parse_args()
     opts = config()
     sensors = sensor_list(opts["temperature_paths"])
+    # Cache slower process/mount details so the 2-second CPU sampling stays cheap.
+    detail_cache = {"top_processes": [], "mounts": []}
+    last_detail_check = -float("inf")
     previous = cpu_ticks()
     time.sleep(0.3 if args.once else opts["interval_seconds"])
     while True:
         current = cpu_ticks()
         try:
-            print(json.dumps(sample(previous, current, opts, sensors), separators=(",", ":")), flush=True)
+            now = time.monotonic()
+            if now - last_detail_check >= 10.0:
+                detail_cache = {"top_processes": top_memory_processes(),
+                                "mounts": mounted_volumes()}
+                last_detail_check = now
+            output = sample(previous, current, opts, sensors)
+            output.update(detail_cache)
+            print(json.dumps(output, separators=(",", ":")), flush=True)
         except Exception as exc:
             print(f"CorePulse: Fehler bei Messung: {exc}", file=sys.stderr, flush=True)
         previous = current
