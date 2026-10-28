@@ -1,8 +1,8 @@
 {
   "id": "conkyBar",
   "name": "CorePulse",
-  "description": "Kompakter DMS-Systemmonitor mit CPU-Graphen, RAM-Prozessliste und Laufwerksbelegung",
-  "version": "0.6.0",
+  "description": "DMS-Systemmonitor mit CPU-, RAM-, Laufwerks- und Akkuanzeige sowie TLP-Profilsteuerung",
+  "version": "0.7.2",
   "author": "mautz-kernel",
   "icon": "monitoring",
   "type": "widget",

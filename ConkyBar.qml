@@ -19,9 +19,64 @@ PluginComponent {
 
     property var physData: []
     property var threadData: []
-    property string activeView: "cpu" // cpu | ram | disk
+    property string activeView: "cpu" // cpu | ram | disk | power
     property var topProcesses: []
     property var mounts: []
+    property var battery: ({})
+    property string tlpProfile: "" // Zuletzt von tlpctl get bestätigtes Profil.
+    property string requestedProfile: ""
+    property string pendingProfile: "" // Sofortige visuelle Rückmeldung nach Klick.
+    property bool profileVerifyPending: false // Nach Setter-Ende neuen Readback starten.
+    property bool profileVerifyActive: false  // Gerade läuft der bestätigende Readback.
+    property string tlpError: ""
+    readonly property string displayProfile: pendingProfile !== "" ? pendingProfile : tlpProfile
+    readonly property string powerSource: battery.ac_online === true ? "Netzbetrieb"
+        : battery.ac_online === false ? "Akkubetrieb" : "Stromquelle unbekannt"
+    readonly property string batteryPercentText: battery.present && battery.percent !== null
+        && battery.percent !== undefined ? battery.percent + "%" : "--%"
+
+    // Die Zeit ist eine Momentaufnahme. Fehlende oder unplausible Daten
+    // werden nicht durch erfundene Restzeiten ersetzt.
+    readonly property string batteryRemainingText: {
+        if (!battery.present)
+            return "Kein Akku erkannt";
+        const status = String(battery.status || "").toLowerCase();
+        const target = battery.charge_limit_pct;
+        if (status === "full")
+            return target !== null && target !== undefined && target < 100
+                ? "Ladeziel " + target + "% erreicht" : "Voll geladen";
+        if (status === "not charging") {
+            if (battery.ac_online === true && target !== null && target !== undefined
+                    && battery.percent !== null && battery.percent !== undefined
+                    && Number(battery.percent) >= Number(target))
+                return "Ladeziel " + target + "% erreicht";
+            return "Ladevorgang pausiert";
+        }
+        if (status !== "charging" && status !== "discharging")
+            return "Restzeit nicht verfügbar";
+        if (battery.time_hours === null || battery.time_hours === undefined
+                || !isFinite(Number(battery.time_hours)) || Number(battery.time_hours) <= 0)
+            return status === "charging" ? "Ladezeit nicht verfügbar"
+                : "Restlaufzeit nicht verfügbar";
+        const minutes = Math.round(Number(battery.time_hours) * 60);
+        if (minutes < 1 || minutes > 72 * 60)
+            return "Restzeit nicht verfügbar";
+        const h = Math.floor(minutes / 60);
+        const min = minutes % 60;
+        const duration = h > 0 ? h + " h " + ("0" + min).slice(-2) + " min"
+            : min + " min";
+        if (status === "discharging")
+            return "ca. " + duration + " Restlaufzeit";
+        return "ca. " + duration + " bis " +
+            (target !== null && target !== undefined ? target + " %" : "Ladeende");
+    }
+    readonly property bool canChangeProfile: (tlpProfile === "balanced" || tlpProfile === "performance")
+        && pendingProfile === "" && !profileSetter.running
+    readonly property string profileIcon: displayProfile === "balanced" ? "ac_unit"
+        : displayProfile === "performance" ? "local_fire_department"
+        : displayProfile === "power-saver" ? "eco" : "help_outline"
+    readonly property color profileColor: displayProfile === "balanced" ? Theme.info
+        : displayProfile === "performance" ? Theme.warning : Theme.widgetIconColor
     property real memTotalGiB: -1
     property real memAvailableGiB: 0
     readonly property real memoryFraction: memTotalGiB > 0
@@ -39,7 +94,7 @@ PluginComponent {
     property int throttleEvents: 0
     property int throttleHotSamples: 0
 
-    popoutWidth: activeView === "cpu" ? 940 : 700
+    popoutWidth: activeView === "cpu" ? 940 : (activeView === "power" ? 620 : 700)
 
     // Feste Breiten verhindern, dass RAM-, Speicher- und CPU-Ziffern die
     // nachfolgenden Icons bei jeder Aktualisierung verschieben.
@@ -51,6 +106,8 @@ PluginComponent {
         font.weight: Font.DemiBold
     }
     readonly property int cpuNumberWidth: Math.ceil(numberMetrics.advanceWidth("100%")) + 2
+    readonly property int batteryNumberWidth: Math.ceil(numberMetrics.advanceWidth(
+        root.battery.percent === 100 ? "100%" : "99%")) + 2
     readonly property int ramNumberWidth: Math.ceil(numberMetrics.advanceWidth("88.8/88.8G")) + 2
     readonly property int diskNumberWidth: Math.ceil(numberMetrics.advanceWidth("8888.8G")) + 2
     readonly property int tempNumberWidth: Math.ceil(numberMetrics.advanceWidth("100°C")) + 2
@@ -117,6 +174,7 @@ PluginComponent {
             cpuTotal = Number(data.cpu_total) || 0;
             topProcesses = Array.isArray(data.top_processes) ? data.top_processes : [];
             mounts = Array.isArray(data.mounts) ? data.mounts : [];
+            battery = data.battery || ({});
             memText = compactGiB(data.mem_used_gib) + "/" + compactGiB(data.mem_total_gib) + "G";
             memTotalGiB = Number(data.mem_total_gib) || -1;
             memAvailableGiB = Math.max(0, memTotalGiB - (Number(data.mem_used_gib) || 0));
@@ -154,6 +212,96 @@ PluginComponent {
         // Trigger through the DMS API so the native popout is anchored to
         // the entire BasePill and respects the current bar orientation.
         root.triggerPopout();
+    }
+
+    function refreshTlpProfile() {
+        if (profileReader.running || profileSetter.running)
+            return;
+        // Als Readback gilt nur ein tlpctl get, das NACH dem Setter gestartet wurde.
+        if (profileVerifyPending) {
+            profileVerifyPending = false;
+            profileVerifyActive = true;
+        }
+        profileReader.running = true;
+    }
+
+    function toggleTlpProfile() {
+        if (!canChangeProfile)
+            return;
+        requestedProfile = tlpProfile === "balanced" ? "performance" : "balanced";
+        tlpError = "";
+        pendingProfile = requestedProfile; // ❄️/🔥 erscheint unmittelbar beim Klick.
+        profileSetter.command = ["/usr/bin/tlpctl", requestedProfile];
+        profileSetter.running = true;
+    }
+
+    Process {
+        id: profileReader
+        command: ["/usr/bin/tlpctl", "get"]
+        running: false
+        stdout: SplitParser {
+            onRead: line => {
+                const profile = line.trim();
+                if (["balanced", "performance", "power-saver"].includes(profile))
+                    root.tlpProfile = profile;
+            }
+        }
+        stderr: SplitParser {
+            onRead: line => root.tlpError = line.trim()
+        }
+        onExited: exitCode => {
+            if (exitCode !== 0) {
+                root.tlpProfile = "";
+                if (!root.tlpError)
+                    root.tlpError = "tlpctl get fehlgeschlagen";
+            }
+            if (root.profileVerifyActive) {
+                root.profileVerifyActive = false;
+                const expected = root.pendingProfile;
+                root.pendingProfile = "";
+                if (exitCode === 0 && root.tlpProfile === expected) {
+                    root.tlpError = "";
+                } else if (exitCode === 0) {
+                    root.tlpError = "TLP meldet " + (root.tlpProfile || "kein Profil")
+                        + " statt " + expected;
+                }
+            }
+            // Falls beim Umschalten bereits ein älterer Read lief, jetzt
+            // zwingend einen NEUEN Readback starten (kein veraltetes Ergebnis).
+            if (root.profileVerifyPending)
+                Qt.callLater(() => root.refreshTlpProfile());
+        }
+    }
+
+    Process {
+        id: profileSetter
+        running: false
+        stdout: SplitParser {
+            onRead: line => console.log("CorePulse TLP: " + line)
+        }
+        stderr: SplitParser {
+            onRead: line => root.tlpError = line.trim()
+        }
+        onExited: exitCode => {
+            if (exitCode !== 0) {
+                root.pendingProfile = ""; // Fehler: sofort zurück zum bestätigten Symbol.
+                if (!root.tlpError)
+                    root.tlpError = "TLP-Profilwechsel fehlgeschlagen";
+            } else {
+                // Bei Erfolg bleibt das neue Symbol sichtbar, bis tlpctl get
+                // den tatsächlichen Zustand bestätigt oder widerlegt.
+                root.profileVerifyPending = true;
+            }
+            Qt.callLater(() => root.refreshTlpProfile());
+        }
+    }
+
+    Timer {
+        interval: 8000
+        repeat: true
+        running: true
+        triggeredOnStart: true
+        onTriggered: root.refreshTlpProfile()
     }
 
     // BasePill zeichnet den Hintergrund selbst (DMS-Theme, Transparenz, Radius).
@@ -202,7 +350,7 @@ PluginComponent {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onPressed: root.openDetail("cpu")
+                    onClicked: root.openDetail("cpu")
                 }
             }
 
@@ -239,7 +387,7 @@ PluginComponent {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onPressed: root.openDetail("ram")
+                    onClicked: root.openDetail("ram")
                 }
             }
 
@@ -276,7 +424,7 @@ PluginComponent {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onPressed: root.openDetail("disk")
+                    onClicked: root.openDetail("disk")
                 }
             }
 
@@ -313,7 +461,73 @@ PluginComponent {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onPressed: root.openDetail("cpu")
+                    onClicked: root.openDetail("cpu")
+                }
+            }
+
+            Rectangle {
+                width: 1; height: Math.min(20, root.graphHeight)
+                color: Theme.widgetTextColor; opacity: 0.17
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            // Stromquelle + Akkuladung als ein Segment (Linksklick: Energiedetails).
+            Item {
+                id: batterySegment
+                width: batteryLine.implicitWidth
+                height: Math.max(batteryLine.implicitHeight, root.graphHeight)
+                Row {
+                    id: batteryLine
+                    anchors.centerIn: parent
+                    spacing: 3
+                    DankIcon {
+                        name: root.battery.ac_online === true ? "power"
+                            : root.battery.ac_online === false ? "battery_std" : "power_off"
+                        size: Math.max(14, root.iconSize - 3)
+                        color: Theme.widgetIconColor
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.verticalCenterOffset: -1
+                    }
+                    Text {
+                        text: root.batteryPercentText
+                        width: root.batteryNumberWidth
+                        horizontalAlignment: Text.AlignRight
+                        color: Theme.widgetTextColor
+                        font.family: Theme.defaultFontFamily
+                        font.pixelSize: root.textSize
+                        font.weight: Font.DemiBold
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openDetail("power")
+                }
+            }
+
+            // Nur am TLP-Symbol schaltet ein Rechtsklick BAL <-> PRF.
+            Item {
+                id: profileSegment
+                width: root.iconSize + 2
+                height: Math.max(root.iconSize, root.graphHeight)
+                DankIcon {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: -1
+                    name: root.profileIcon
+                    size: Math.max(14, root.iconSize - 3)
+                    color: root.profileColor
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: mouse => {
+                        if (mouse.button === Qt.RightButton)
+                            root.toggleTlpProfile();
+                        else
+                            root.openDetail("power");
+                    }
                 }
             }
 
@@ -356,7 +570,8 @@ PluginComponent {
         PopoutComponent {
             headerText: root.activeView === "cpu" ? "CorePulse · CPU-Details"
                       : root.activeView === "ram" ? "CorePulse · Arbeitsspeicher"
-                      : "CorePulse · Laufwerke"
+                      : root.activeView === "disk" ? "CorePulse · Laufwerke"
+                      : "CorePulse · Energie"
             showCloseButton: true
 
             Row {
@@ -368,7 +583,7 @@ PluginComponent {
                 bottomPadding: Theme.spacingM
 
                 Repeater {
-                    model: ["cpu", "ram", "disk"]
+                    model: ["cpu", "ram", "disk", "power"]
                     Rectangle {
                         id: tab
                         required property int index
@@ -384,7 +599,8 @@ PluginComponent {
                         Text {
                             anchors.centerIn: parent
                             text: tab.modelData === "cpu" ? "CPU"
-                                : tab.modelData === "ram" ? "RAM" : "Laufwerke"
+                                : tab.modelData === "ram" ? "RAM"
+                                : tab.modelData === "disk" ? "Laufwerke" : "Energie"
                             font.pixelSize: Math.max(14, Theme.fontSizeMedium)
                             font.weight: parent.selected ? Font.DemiBold : Font.Normal
                             color: parent.selected ? Theme.primary : Theme.surfaceText
@@ -573,7 +789,6 @@ PluginComponent {
                     color: Theme.surfaceVariantText
                 }
             }
-        }
 
             Column {
                 id: ramDetails
@@ -764,5 +979,126 @@ PluginComponent {
                     color: Theme.surfaceVariantText
                 }
             }
+
+            Column {
+                id: powerDetails
+                visible: root.activeView === "power"
+                width: parent.width
+                leftPadding: Theme.spacingM
+                rightPadding: Theme.spacingM
+                bottomPadding: Theme.spacingL
+                spacing: Theme.spacingM
+                readonly property int detailSize: Math.max(14, Theme.fontSizeMedium)
+                readonly property real usable: width - leftPadding - rightPadding
+
+                Text {
+                    width: powerDetails.usable
+                    wrapMode: Text.WordWrap
+                    text: root.powerSource + "  ·  Akku " + root.batteryPercentText
+                        + "  ·  " + root.batteryRemainingText
+                    font.pixelSize: powerDetails.detailSize + 3
+                    font.weight: Font.DemiBold
+                    color: Theme.surfaceText
+                }
+                Rectangle {
+                    width: powerDetails.usable; height: 12
+                    radius: 6
+                    color: Theme.withAlpha(Theme.surfaceVariantText, 0.17)
+                    Rectangle {
+                        height: parent.height
+                        width: parent.width * Math.min(1, Math.max(0,
+                            (Number(root.battery.percent) || 0) / 100))
+                        radius: parent.radius
+                        color: Theme.primary
+                    }
+                }
+                Text {
+                    width: powerDetails.usable
+                    wrapMode: Text.WordWrap
+                    text: "Akku: " + (root.battery.status || "nicht verfügbar")
+                        + (root.battery.charge_limit_pct !== null
+                            && root.battery.charge_limit_pct !== undefined
+                            ? "  ·  Ladeziel: " + root.battery.charge_limit_pct + " %"
+                            : "  ·  Ladeziel: nicht auslesbar (Einstellung möglich)")
+                    font.pixelSize: powerDetails.detailSize
+                    color: Theme.surfaceVariantText
+                }
+                Text {
+                    visible: root.battery.health_pct !== null && root.battery.health_pct !== undefined
+                    text: "Akkugesundheit: " + Number(root.battery.health_pct).toFixed(0) + " % der Designkapazität"
+                    font.pixelSize: powerDetails.detailSize
+                    color: Theme.surfaceVariantText
+                }
+                Text {
+                    text: "TLP-Profil: " + (root.displayProfile || "nicht verfügbar")
+                        + (root.pendingProfile !== "" ? " (Umschaltung läuft …)" : "")
+                    font.pixelSize: powerDetails.detailSize + 2
+                    font.weight: Font.DemiBold
+                    color: Theme.surfaceText
+                }
+                Row {
+                    spacing: Theme.spacingS
+                    Repeater {
+                        model: ["balanced", "performance"]
+                        Rectangle {
+                            id: profileButton
+                            required property string modelData
+                            readonly property bool selected: root.displayProfile === modelData
+                            width: 218
+                            height: 42
+                            radius: Theme.cornerRadius
+                            color: selected ? Theme.withAlpha(Theme.primary, 0.20)
+                                : Theme.withAlpha(Theme.surfaceVariantText, 0.08)
+                            border.width: selected ? 1 : 0
+                            border.color: Theme.primary
+                            Row {
+                                anchors.centerIn: parent
+                                spacing: 8
+                                DankIcon {
+                                    name: profileButton.modelData === "balanced" ? "ac_unit" : "local_fire_department"
+                                    size: 20
+                                    color: profileButton.modelData === "balanced" ? Theme.info : Theme.warning
+                                }
+                                Text {
+                                    text: profileButton.modelData === "balanced" ? "Balanced" : "Performance"
+                                    font.pixelSize: powerDetails.detailSize
+                                    color: Theme.surfaceText
+                                }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: root.canChangeProfile && !profileButton.selected
+                                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                onClicked: root.toggleTlpProfile()
+                            }
+                        }
+                    }
+                }
+                Text {
+                    width: powerDetails.usable
+                    wrapMode: Text.WordWrap
+                    text: "Rechtsklick auf ❄️/🔥 in der Leiste: Balanced ↔ Performance. "
+                        + "Netzteil und TLP-Profil sind unabhängig voneinander."
+                    font.pixelSize: powerDetails.detailSize
+                    color: Theme.surfaceVariantText
+                }
+                Text {
+                    visible: !!root.tlpError
+                    width: powerDetails.usable
+                    wrapMode: Text.WordWrap
+                    text: root.tlpError
+                    font.pixelSize: powerDetails.detailSize
+                    color: Theme.error
+                }
+                Text {
+                    width: powerDetails.usable
+                    text: "P-State-Obergrenze: " + (root.maxPerfPct >= 0
+                        ? root.maxPerfPct.toFixed(0) + " %" : "nicht verfügbar")
+                        + "  ·  CPU-Package: " + root.tempText
+                    font.pixelSize: powerDetails.detailSize
+                    color: Theme.surfaceVariantText
+                }
+            }
+        }
     }
 }

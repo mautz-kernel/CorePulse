@@ -14,7 +14,8 @@ import sys
 import time
 
 BASE = Path(__file__).resolve().parent
-DEFAULTS = {"mountpoint": "/home", "interval_seconds": 2.0, "temperature_paths": []}
+DEFAULTS = {"mountpoint": "/home", "interval_seconds": 2.0, "temperature_paths": [],
+            "battery_charge_limit_percent": None}
 
 
 def config():
@@ -33,6 +34,14 @@ def config():
         result["mountpoint"] = "/home"
     if not isinstance(result["temperature_paths"], list):
         result["temperature_paths"] = []
+    # Optionale BIOS-Ladegrenze (z.B. Dell 85 %) nur aus bewusster Einstellung.
+    try:
+        limit = int(result["battery_charge_limit_percent"])
+        if not 50 <= limit <= 100:
+            raise ValueError
+        result["battery_charge_limit_percent"] = limit
+    except (TypeError, ValueError):
+        result["battery_charge_limit_percent"] = None
     try:
         result["interval_seconds"] = min(30, max(0.5, float(result["interval_seconds"])))
     except (TypeError, ValueError):
@@ -266,6 +275,123 @@ def mounted_volumes(limit=18):
     return result[:limit]
 
 
+
+def remaining_battery_hours(now, full, rate, status, charge_limit_pct):
+    """Momentaufnahme aus zusammengehörigen sysfs-Einheiten (uWh/uW oder uAh/uA).
+
+    Ohne erkennbares Ladeziel keine scheinbar genaue Zeit bis 100 % ausgeben:
+    ein BIOS-Limit kann deutlich darunter liegen. Beim Entladen zählt der
+    aktuelle Energievorrat unabhängig vom eingestellten Ladestopp.
+    """
+    if rate <= 0 or full <= 0 or now < 0:
+        return None
+    if status == "discharging":
+        hours = now / rate
+    elif status == "charging" and charge_limit_pct is not None:
+        target = full * charge_limit_pct / 100.0
+        remaining = target - now
+        if remaining <= 0:
+            return None
+        hours = remaining / rate
+    else:
+        return None
+    if 0 < hours <= 72:
+        return round(hours, 3)
+    return None
+
+
+def power_supply_status(base=Path("/sys/class/power_supply"), charge_limit_percent=None):
+    """Laptop-Stromversorgung aus sysfs lesen, ohne externe Werkzeuge.
+
+    Die Systembatterie wird bevorzugt; Bluetooth-/Eingabegeräteakkus
+    duerfen nicht versehentlich die Laptop-Anzeige uebernehmen.
+    """
+    try:
+        supplies = sorted(base.iterdir())
+    except OSError:
+        supplies = []
+    battery = None
+    ac_mains = None
+    ac_other = None
+    for supply in supplies:
+        kind = read_text(supply / "type").lower()
+        if kind in ("mains", "usb", "usb_c", "usb_pd"):
+            online = read_text(supply / "online")
+            if online in ("0", "1"):
+                # Die echte Netzteil-Schnittstelle hat Vorrang vor USB.
+                if kind == "mains":
+                    ac_mains = (ac_mains is True or online == "1")
+                else:
+                    ac_other = (ac_other is True or online == "1")
+        elif kind == "battery":
+            if read_text(supply / "present") == "0":
+                continue
+            scope = read_text(supply / "scope").lower()
+            if scope == "device":
+                continue
+            if battery is None or supply.name.startswith("BAT"):
+                battery = supply
+    ac_online = ac_mains if ac_mains is not None else ac_other
+    result = {
+        "present": battery is not None, "percent": None,
+        "status": "", "ac_online": ac_online,
+        "health_pct": None, "time_hours": None,
+        "charge_limit_pct": None, "power_w": None,
+    }
+    if battery is None:
+        return result
+    percent = read_text(battery / "capacity")
+    try:
+        pct = int(percent)
+        if 0 <= pct <= 100:
+            result["percent"] = pct
+    except ValueError:
+        pass
+    result["status"] = read_text(battery / "status")
+    # Wenn der Kernel eine Ladeschwelle kennt, hat sie Vorrang vor dem
+    # optionalen Benutzerwert; 100 % kann auch "kein Kernel-Limit" bedeuten.
+    threshold = read_text(battery / "charge_control_end_threshold")
+    try:
+        kernel_limit = int(threshold)
+        if not 50 <= kernel_limit <= 100:
+            kernel_limit = None
+    except ValueError:
+        kernel_limit = None
+    # Ein explicit gesetztes 85-%-BIOS-Ziel darf 100 % aus sysfs
+    # überschreiben, da manche Firmware nur das Standardziel ausweist.
+    if kernel_limit is not None and kernel_limit < 100:
+        result["charge_limit_pct"] = kernel_limit
+    elif charge_limit_percent is not None:
+        result["charge_limit_pct"] = charge_limit_percent
+    elif kernel_limit is not None:
+        result["charge_limit_pct"] = kernel_limit
+
+    # Sysfs energy_now/full [uWh], power_now [uW]. Alternative charge [uAh]
+    # and current [uA] yield the same duration ratio.
+    for stored, full, original, rate in (("energy_now", "energy_full", "energy_full_design", "power_now"),
+                                          ("charge_now", "charge_full", "charge_full_design", "current_now")):
+        try:
+            now = float(read_text(battery / stored))
+            capacity = float(read_text(battery / full))
+            speed = float(read_text(battery / rate))
+        except ValueError:
+            continue
+        if stored == "energy_now" and speed >= 0:
+            result["power_w"] = round(speed / 1000000, 1)
+        design = read_text(battery / original)
+        try:
+            design_capacity = float(design)
+            if design_capacity > 0:
+                result["health_pct"] = round(100 * capacity / design_capacity, 1)
+        except ValueError:
+            pass
+        result["time_hours"] = remaining_battery_hours(
+            now, capacity, abs(speed), result["status"].lower(),
+            result["charge_limit_pct"])
+        break
+    return result
+
+
 def physical_core_groups(cpu_ids):
     """Gruppiert logische Linux-CPUs nach CPU-Package + physischem Core.
 
@@ -382,7 +508,7 @@ def main():
     opts = config()
     sensors = sensor_list(opts["temperature_paths"])
     # Cache slower process/mount details so the 2-second CPU sampling stays cheap.
-    detail_cache = {"top_processes": [], "mounts": []}
+    detail_cache = {"top_processes": [], "mounts": [], "battery": {}}
     last_detail_check = -float("inf")
     previous = cpu_ticks()
     time.sleep(0.3 if args.once else opts["interval_seconds"])
@@ -392,7 +518,9 @@ def main():
             now = time.monotonic()
             if now - last_detail_check >= 10.0:
                 detail_cache = {"top_processes": top_memory_processes(),
-                                "mounts": mounted_volumes()}
+                                "mounts": mounted_volumes(),
+                                "battery": power_supply_status(
+                                    charge_limit_percent=opts["battery_charge_limit_percent"])}
                 last_detail_check = now
             output = sample(previous, current, opts, sensors)
             output.update(detail_cache)
